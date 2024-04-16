@@ -13,9 +13,22 @@ Tasks suited for the GPU
 */
 
 //kernel time! 
-__global__ void add(){
-
+__global__ void searchForRealMatchesKernel(const char *text, int textLength, const char *pattern, int patternLength, int *results) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx <= textLength - patternLength) {
+        bool found = true;
+        for (int j = 0; j < patternLength; j++) {
+            if (text[idx + j] != pattern[j]) {
+                found = false;
+                break;
+            }
+        }
+        if (found) {
+            results[idx] = 1; // Mark start of a match
+        }
+    }
 }
+
 
 struct fileinfo {
     int numLines;
@@ -93,15 +106,16 @@ Tasks suited for the CPU
 */
 
 int main(int argc, char** argv) {
-    // vars for storing things that are used in MPI method calls
-    char** inputLines = nullptr;
-    char** patternLines = nullptr;
-    int numLinesPerNode = -1;
-    char** INInputLines = nullptr; // where IN means individual node (the lines for each node to analyze)
-    int* numPatternLinesPtr = (int*)malloc(sizeof(int));
-    int* numInputLinesPtr = (int*)malloc(sizeof(int));;
-    int* lenPatternLinesPtr = (int*)malloc(sizeof(int));;
-    int* lenInputLinesPtr = (int*)malloc(sizeof(int));;
+
+    char *d_text, *d_pattern; // device pointers for text and pattern
+    int textLength, patternLength; // sizes of text and pattern
+    // Allocate memory on GPU
+    cudaMalloc((void**)&d_text, sizeof(char) * textLength);
+    cudaMalloc((void**)&d_pattern, sizeof(char) * patternLength);
+    // Copy data from host to GPU
+    cudaMemcpy(d_text, hostText, sizeof(char) * textLength, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_pattern, hostPattern, sizeof(char) * patternLength, cudaMemcpyHostToDevice);
+
 
     if (rank == 0) {
         // get info about inout file
