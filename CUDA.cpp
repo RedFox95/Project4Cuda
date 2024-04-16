@@ -1,22 +1,27 @@
-#include <mpi.h>
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <cstring>
-
-
-/**
- * TODO
- * - test with 10+ matches assigned to one node to find
- * - test with 10+ total matches
- *
- * later improvements if time
- * - any other way to get the file length? this will be way too slow for bigger files
- * - when looking at the matches from node 0, ignore if it's the first line for any pattern matches that are not the first line of the pattern
- * - turn dynamic arrays into linked lists?
-*/
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 
 using namespace std;
+
+cudaError_t status;
+char *d_inputText, *d_patternText;
+int *d_results;  // For storing the result of matches.
+
+// Allocate memory on the GPU
+status = cudaMalloc((void **)&d_inputText, sizeof(char) * inputTextLength);
+status = cudaMalloc((void **)&d_patternText, sizeof(char) * patternLength);
+status = cudaMalloc((void **)&d_results, sizeof(int) * inputTextLength);
+
+// Transfer data from host to device
+status = cudaMemcpy(d_inputText, inputText, sizeof(char) * inputTextLength, cudaMemcpyHostToDevice);
+status = cudaMemcpy(d_patternText, patternText, sizeof(char) * patternLength, cudaMemcpyHostToDevice);
+
+// Initialize results array to zero
+cudaMemset(d_results, 0, sizeof(int) * inputTextLength);
 
 struct fileinfo {
     int numLines;
