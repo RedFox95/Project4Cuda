@@ -2,26 +2,20 @@
 #include <fstream>
 #include <string>
 #include <cstring>
-#include <cuda_runtime.h>
-#include <device_launch_parameters.h>
+#include <stdio.h>
 
 using namespace std;
 
-cudaError_t status;
-char *d_inputText, *d_patternText;
-int *d_results;  // For storing the result of matches.
+/*
+Tasks suited for the GPU
+* pattern matching
+* result aggregation
+*/
 
-// Allocate memory on the GPU
-status = cudaMalloc((void **)&d_inputText, sizeof(char) * inputTextLength);
-status = cudaMalloc((void **)&d_patternText, sizeof(char) * patternLength);
-status = cudaMalloc((void **)&d_results, sizeof(int) * inputTextLength);
+//kernel time! 
+__global__ void add(){
 
-// Transfer data from host to device
-status = cudaMemcpy(d_inputText, inputText, sizeof(char) * inputTextLength, cudaMemcpyHostToDevice);
-status = cudaMemcpy(d_patternText, patternText, sizeof(char) * patternLength, cudaMemcpyHostToDevice);
-
-// Initialize results array to zero
-cudaMemset(d_results, 0, sizeof(int) * inputTextLength);
+}
 
 struct fileinfo {
     int numLines;
@@ -88,13 +82,17 @@ matchCoordinate searchForRealMatches(matchLocation match, matchLocation** allMat
     return retVal;
 }
 
+/*
+Tasks suited for the CPU
+* File reading and data preparation
+* Data transfer
+* Initiating Kernel launch
+* Collecting results
+* Post-processing and output
+* Memory management
+*/
+
 int main(int argc, char** argv) {
-    // necessary setup for MPI
-    MPI_Init(NULL, NULL);
-    int world_size; // how many total nodes we have
-    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-    int rank; // rank is the node number
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     // vars for storing things that are used in MPI method calls
     char** inputLines = nullptr;
     char** patternLines = nullptr;
@@ -147,11 +145,6 @@ int main(int argc, char** argv) {
 
     
 
-    // need to bcast number of lines and length of line for both files
-    MPI_Bcast(numPatternLinesPtr, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(numInputLinesPtr, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(lenPatternLinesPtr, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Bcast(lenInputLinesPtr, 1, MPI_INT, 0, MPI_COMM_WORLD);
     int numPatternLines = *numPatternLinesPtr;
     int numInputLines = *numInputLinesPtr;
     int lenPatternLines = *lenPatternLinesPtr;
@@ -238,11 +231,6 @@ int main(int argc, char** argv) {
         }
     }
     // now node 0 needs to collect all the matches to determine which are full matches
-
-    // define MPI data types for sending the matchLocation struct
-    MPI_Datatype mpi_matchLocation_type;
-    MPI_Type_contiguous(3, MPI_INT, &mpi_matchLocation_type);
-    MPI_Type_commit(&mpi_matchLocation_type);
     if (rank != 0) {
         // first send the number of matches for this node
         MPI_Send(&numMatches, 1, MPI_INT, 0, 2, MPI_COMM_WORLD); // tag is 2
@@ -349,8 +337,6 @@ int main(int argc, char** argv) {
     free(lenPatternLinesPtr);
     free(numInputLinesPtr);
     free(numPatternLinesPtr);
-    MPI_Type_free(&mpi_matchLocation_type);
-    MPI_Finalize();
 
     return 0;
 }
