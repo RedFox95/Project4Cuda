@@ -8,7 +8,7 @@ using namespace std;
 
 struct fileinfo {
     int numLines;
-    int lineLength;
+    size_t lineLength;
 };
 
 struct matchLocation {
@@ -23,7 +23,7 @@ struct matchCoordinate {
 };
 
 
- //Get the fileinfo struct for this file, containing the number of lines and length of a line.
+//Get the fileinfo struct for this file, containing the number of lines and length of a line.
 
 fileinfo getFileInfo(string filename) {
     ifstream lineCounter(filename);
@@ -36,15 +36,15 @@ fileinfo getFileInfo(string filename) {
 }
 
 
- //Returns the upper leftmost coordinate of a full match, otherwise return null if no full match.
+//Returns the upper leftmost coordinate of a full match, otherwise return null if no full match.
 
-matchCoordinate searchForRealMatches(matchLocation match, matchLocation** allMatches, int* numMatchesArr, int numPatternLines, int world_size) {
+matchCoordinate searchForRealMatches(matchLocation match, matchLocation** allMatches, int* numMatchesArr, int numPatternLines, int totalNumThreads) {
     //cout << "-> searchForRealMAtches x:" << match.x << " y: " << match.y << " pl: " << match.pl << endl;
     matchLocation** patternMatchLocations = new matchLocation * [numPatternLines];
     for (int i = 0; i < numPatternLines; i++) patternMatchLocations[i] = nullptr;
 
     patternMatchLocations[match.pl] = &match;
-    for (int i = 0; i < world_size; i++) {
+    for (int i = 0; i < totalNumThreads; i++) {
         for (int j = 0; j < numMatchesArr[i]; j++) {
             bool fullMatch = true;
             // for each match...
@@ -71,35 +71,51 @@ matchCoordinate searchForRealMatches(matchLocation match, matchLocation** allMat
     return retVal;
 }
 
-__global__ void findPartialMatches(char**inputLines, char**patternLines, int*numInputLines, int*lenInputLines, int*numPatternLines, int*lenPatternLines, int*numMatchesArr, matchLocation**allMatches, int*numThreads) {
+__device__ void findSubStr(char*str, int strLen, char* subStr, int subStrLen, int pos, int*foundPos) {
+    for (int i = pos; i <= strLen - subStrLen; i++) {
+        bool found = true;
+        for (int j = 0; j < subStrLen; j++) {
+            if (str[i + j] != subStr[j]) {
+                found = false;
+                break;
+            }
+        }
+        if (found) *foundPos = i;
+    }
+    *foundPos = -1;
+}
+
+__global__ void findPartialMatches(char** inputLines, char** patternLines, int* numInputLines, int* lenInputLines, int* numPatternLines, int* lenPatternLines, int* numMatchesArr, matchLocation** allMatches, int* numThreads) {
     int threadId = threadIdx.x + blockIdx.x * blockDim.x;
     int totalNumThreads = blockDim.x * (*numThreads);
     numMatchesArr[threadId] = 0; // initialize all numMatches to 0
-    if (threadId <= numInputLines) {
+    if (threadId <= *numInputLines) {
         int sizeOfMatchArr = 10; // 10 for now... then dynamically increase if needed
         allMatches[threadId] = new matchLocation[sizeOfMatchArr]; // store the matches at the index for this thread
-        for (int j = 0; j < numPatternLines; j++) {
+        for (int j = 0; j < *numPatternLines; j++) {
             int pos = 0;
-            string jPatternLine(patternLines[j], patternLines[j] + lenPatternLines-1);
-            string iInputLine(inputLines[threadId], inputLines[threadId] + lenInputLines-1);
-            int found = iInputLine.find(jPatternLine, pos);
-            while (found != string::npos) {
+            //string jPatternLine(patternLines[j], patternLines[j] + *lenPatternLines - 1);
+            //string iInputLine(inputLines[threadId], inputLines[threadId] + *lenInputLines - 1);
+            //int found = iInputLine.find(jPatternLine, pos);
+            int* found;
+            findSubStr(inputLines[threadId], *lenInputLines - 1, patternLines[j], *lenPatternLines - 1, 0, found);
+            while (*found != -1) {
                 if (numMatchesArr[threadId] >= sizeOfMatchArr) {
                     // increase matchArr size 
                     int biggerSize = sizeOfMatchArr * 2;
                     matchLocation* biggerArr = new matchLocation[biggerSize];
-                    memcpy(biggerArr, matchArr, sizeof(matchLocation) * numMatchesArr[threadId]);
-                    delete[] matchArr;
-                    matchArr = biggerArr;
+                    memcpy(biggerArr, allMatches[threadId], sizeof(matchLocation) * numMatchesArr[threadId]);
+                    delete[] allMatches[threadId];
+                    allMatches[threadId] = biggerArr;
                     sizeOfMatchArr = biggerSize;
                 }
                 // store the match
-                struct matchLocation m = { threadId, found, j }; // where threadId is the row number, found is the col number, and j is the pattern line number
-                matchArr[numMatchesArr[threadId]] = m;
+                struct matchLocation m = { threadId, *found, j }; // where threadId is the row number, found is the col number, and j is the pattern line number
+                allMatches[threadId][numMatchesArr[threadId]] = m;
                 // update pos, numMatches, and found for the next iteration
-                pos = found + 1;
+                pos = *found + 1;
                 numMatchesArr[threadId]++;
-                found = iInputLine.find(jPatternLine, pos);
+                findSubStr(inputLines[threadId], *lenInputLines - 1, patternLines[j], *lenPatternLines - 1, pos, found);
             }
         }
     }
@@ -146,8 +162,8 @@ int main(int argc, char** argv) {
 
     cout << "about to allocate mem for inputLines and patternlines" << endl;
     // allocate memory on device for inputLines and patternLines and copy to the device memory
-    char ** inputLinesDevice;
-    cudaMalloc(&inputLinesDevice, numInputLines * sizeof(char*)); 
+    char** inputLinesDevice;
+    cudaMalloc(&inputLinesDevice, numInputLines * sizeof(char*));
     cout << "cudamalloc for inputLinesDevice done" << endl;
     cudaMemcpy(inputLinesDevice, inputLines, numInputLines * sizeof(char*), cudaMemcpyHostToDevice);
     cout << "cudaMemcpy for inputLinesDevice done" << endl;
@@ -156,8 +172,8 @@ int main(int argc, char** argv) {
         cudaMemcpy(inputLinesDevice[i], inputLines[i], lenInputLines * sizeof(char), cudaMemcpyHostToDevice);
     }
     cout << "malloc and memcpy done for each line of input" << endl;
-    char ** patternLinesDevice;
-    cudaMalloc(&patternLinesDevice, numPatternLines * sizeof(char*)); 
+    char** patternLinesDevice;
+    cudaMalloc(&patternLinesDevice, numPatternLines * sizeof(char*));
     cudaMemcpy(patternLinesDevice, patternLines, numPatternLines * sizeof(char*), cudaMemcpyHostToDevice);
     for (int i = 0; i < numPatternLines; i++) {
         cudaMalloc(&patternLinesDevice[i], lenPatternLines * sizeof(char));
@@ -178,25 +194,25 @@ int main(int argc, char** argv) {
 
     // setup pointers to get the results from device memory in allMatchLocations and numMatchesArr
     matchLocation** allMatchLocationsDevice;
-    cudaMalloc(&allMatchLocationsDevice, numBlocks * sizeof(matchLocation*)); 
+    cudaMalloc(&allMatchLocationsDevice, numBlocks * sizeof(matchLocation*));
 
     int* numMatchesArrDevice;
-    cudaMalloc(&numMatchesArrDevice, numBlocks * sizeof(int)); 
+    cudaMalloc(&numMatchesArrDevice, numBlocks * sizeof(int));
     for (int i = 0; i < numBlocks; i++) {
-        cudaMalloc(&numMatchesArrDevice[i], numBlocks * sizeof(int)); 
+        cudaMalloc((void**) & numMatchesArrDevice[i], numBlocks * sizeof(int));
     }
     cout << "about to start kernel" << endl;
     // start the kernel to find partial matches
-    findPartialMatches<<<numBlocks,numThreads>>>(inputLinesDevice, patternLinesDevice, &numInputLines, &lenInputLines, &numPatternLines, &lenPatternLines, allMatchLocationsDevice, numMatchesArrDevice, &numThreads);
+    findPartialMatches<<<numBlocks,numThreads>>>(inputLinesDevice, patternLinesDevice, &numInputLines, &lenInputLines, &numPatternLines, &lenPatternLines, numMatchesArrDevice, allMatchLocationsDevice, &numThreads);
     cout << "after kernel exec (not necessarily done)" << endl;
     // copy the results to host memory
     int* numMatchesArr = new int[totalNumThreads];
     matchLocation** allMatchLocations = new matchLocation * [totalNumThreads];
 
     for (int i = 0; i < totalNumThreads; i++) {
-        cudaMemcpy(numMatchesArrDevice[i], numMatchesArr[i], sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpy((void*) & numMatchesArrDevice[i], &numMatchesArr[i], sizeof(int), cudaMemcpyDeviceToHost);
         if (numMatchesArr[i] > 0) {
-            cudaMemcpy(allMatchLocationsDevice[i], allMatchLocations[i], numMatchesArr[i] * (matchLocation*), cudaMemcpyDeviceToHost);
+            cudaMemcpy(allMatchLocationsDevice[i], allMatchLocations[i], numMatchesArr[i] * sizeof(matchLocation*), cudaMemcpyDeviceToHost);
         }
     }
     cout << "after copying mem from dev to host for nummatch and allmatchloc" << endl;
@@ -210,7 +226,7 @@ int main(int argc, char** argv) {
     int numCoords = 0;
     for (int i = 0; i < numBlocks; i++) {
         for (int j = 0; j < numMatchesArr[i]; j++) {
-            matchCoordinate coor = searchForRealMatches(allMatchLocations[i][j], allMatchLocations, numMatchesArr, numPatternLines, world_size);
+            matchCoordinate coor = searchForRealMatches(allMatchLocations[i][j], allMatchLocations, numMatchesArr, numPatternLines, totalNumThreads);
             if (coor.x == -1 && coor.y == -1) continue; // not a match
             bool alreadyFound = false;
             for (int k = 0; k < numCoords; k++) {
