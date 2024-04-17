@@ -6,28 +6,60 @@
 
 using namespace std;
 
+/* 
+Required for Visual Studio
+Select CUDA runtime project
+#include <cuda.runtime>
+#include <device_launch_parameters>
+
+** for memory usage see if you can find a tool to get this or if you can't just estimate**
+
+CudaMalloc(need to know what goes inside this parameter)
+CudaMemcpy(need to know what goes inside this parameter)
+
+Kernel
+<<<int, int>>> first int is blocks second block is threads (threads are in multiples of 32)
+
+for writeup need to test numbers against OpenMPI
+try 
+<<<1,1>>>
+<<<1,32>>>
+<<<1,64>>>
+<<<1,128>>>
+<<<1,256>>>
+<<<1,512>>>
+<<<1,1024>>>
+<<<1,2048>>>
+and then same threads against 1,2,3,5,10,20,40,80,100 blocks
+
+
+*/
+
 /*
 Tasks suited for the GPU
 * pattern matching
 * result aggregation
 */
 
-//kernel time! 
-__global__ void searchForRealMatchesKernel(const char *text, int textLength, const char *pattern, int patternLength, int *results) {
+//CUDA implementation of search function
+__global__ void findPatternKernel(const char *text, int textLength, const char *pattern, int patternLength, int *matchResults) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx <= textLength - patternLength) {
-        bool found = true;
-        for (int j = 0; j < patternLength; j++) {
-            if (text[idx + j] != pattern[j]) {
-                found = false;
+    if (idx <= textLength - patternLength) {  // Ensure thread doesn't start out of bounds
+        bool matchFound = true;
+        for (int i = 0; i < patternLength; i++) {
+            if (text[idx + i] != pattern[i]) {
+                matchFound = false;
                 break;
             }
         }
-        if (found) {
-            results[idx] = 1; // Mark start of a match
+        if (matchFound) {
+            matchResults[idx] = 1;  // Mark this index as a start of a full match
+        } else {
+            matchResults[idx] = 0;
         }
     }
 }
+
 
 
 struct fileinfo {
@@ -107,17 +139,6 @@ Tasks suited for the CPU
 
 int main(int argc, char** argv) {
 
-    char *d_text, *d_pattern; // device pointers for text and pattern
-    int textLength, patternLength; // sizes of text and pattern
-    // Allocate memory on GPU
-    cudaMalloc((void**)&d_text, sizeof(char) * textLength);
-    cudaMalloc((void**)&d_pattern, sizeof(char) * patternLength);
-    // Copy data from host to GPU
-    cudaMemcpy(d_text, hostText, sizeof(char) * textLength, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_pattern, hostPattern, sizeof(char) * patternLength, cudaMemcpyHostToDevice);
-
-
-    if (rank == 0) {
         // get info about inout file
         string inputFile = argv[1];
         fileinfo inputInfo = getFileInfo(inputFile);
