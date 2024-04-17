@@ -98,7 +98,7 @@ __global__ void findPartialMatches(char**inputLines, char**patternLines, int*num
                 matchArr[numMatchesArr[threadId]] = m;
                 // update pos, numMatches, and found for the next iteration
                 pos = found + 1;
-                numMatchesArr[threadId]++; // TODO use atomic cuda increment
+                numMatchesArr[threadId]++;
                 found = iInputLine.find(jPatternLine, pos);
             }
         }
@@ -144,14 +144,18 @@ int main(int argc, char** argv) {
         lineNum++;
     }
 
+    cout << "about to allocate mem for inputLines and patternlines" << endl;
     // allocate memory on device for inputLines and patternLines and copy to the device memory
     char ** inputLinesDevice;
     cudaMalloc(&inputLinesDevice, numInputLines * sizeof(char*)); 
+    cout << "cudamalloc for inputLinesDevice done" << endl;
     cudaMemcpy(inputLinesDevice, inputLines, numInputLines * sizeof(char*), cudaMemcpyHostToDevice);
+    cout << "cudaMemcpy for inputLinesDevice done" << endl;
     for (int i = 0; i < numInputLines; i++) {
         cudaMalloc(&inputLinesDevice[i], lenInputLines * sizeof(char));
         cudaMemcpy(inputLinesDevice[i], inputLines[i], lenInputLines * sizeof(char), cudaMemcpyHostToDevice);
     }
+    cout << "malloc and memcpy done for each line of input" << endl;
     char ** patternLinesDevice;
     cudaMalloc(&patternLinesDevice, numPatternLines * sizeof(char*)); 
     cudaMemcpy(patternLinesDevice, patternLines, numPatternLines * sizeof(char*), cudaMemcpyHostToDevice);
@@ -159,7 +163,7 @@ int main(int argc, char** argv) {
         cudaMalloc(&patternLinesDevice[i], lenPatternLines * sizeof(char));
         cudaMemcpy(patternLinesDevice[i], patternLines[i], lenPatternLines * sizeof(char), cudaMemcpyHostToDevice);
     }
-
+    cout << "same done for pattern" << endl;
     // set the number of blocks and number of threads we want to use
     int numBlocks = 1;
     int numThreads = 32;
@@ -181,10 +185,10 @@ int main(int argc, char** argv) {
     for (int i = 0; i < numBlocks; i++) {
         cudaMalloc(&numMatchesArrDevice[i], numBlocks * sizeof(int)); 
     }
-
+    cout << "about to start kernel" << endl;
     // start the kernel to find partial matches
     findPartialMatches<<<numBlocks,numThreads>>>(inputLinesDevice, patternLinesDevice, &numInputLines, &lenInputLines, &numPatternLines, &lenPatternLines, allMatchLocationsDevice, numMatchesArrDevice, &numThreads);
-
+    cout << "after kernel exec (not necessarily done)" << endl;
     // copy the results to host memory
     int* numMatchesArr = new int[totalNumThreads];
     matchLocation** allMatchLocations = new matchLocation * [totalNumThreads];
@@ -195,7 +199,7 @@ int main(int argc, char** argv) {
             cudaMemcpy(allMatchLocationsDevice[i], allMatchLocations[i], numMatchesArr[i] * (matchLocation*), cudaMemcpyDeviceToHost);
         }
     }
-    
+    cout << "after copying mem from dev to host for nummatch and allmatchloc" << endl;
 
     // prep the output file 
     ofstream outputFile("output.txt");
