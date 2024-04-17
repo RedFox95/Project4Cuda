@@ -71,34 +71,34 @@ matchCoordinate searchForRealMatches(matchLocation match, matchLocation** allMat
     return retVal;
 }
 
-__global__ void findPartialMatches(char**inputLines, char**patternLines, int*numInputLines, int*lenInputLines, int*numPatternLines, int*lenPatternLines, int*numMatchesArr, matchLocation**allMatches) {
-    int sizeOfMatchArr = 10; // 10 for now... then dynamically increase if needed
-    allMatches[blockIdx.x] = new matchLocation[sizeOfMatchArr]; // store the matches at the index for this block number
-    for (int i = 0; i < numInputLines; i++) {
-        if (i % numBlocks != blockIdx.x) continue; // not this block's line to look at
-        // TODO decide how to handle threads in each block
+__global__ void findPartialMatches(char**inputLines, char**patternLines, int*numInputLines, int*lenInputLines, int*numPatternLines, int*lenPatternLines, int*numMatchesArr, matchLocation**allMatches, int*numThreads) {
+    int threadId = threadIdx.x + blockIdx.x * blockDim.x;
+    int totalNumThreads = blockDim.x * (*numThreads);
+    numMatchesArr[threadId] = 0; // initialize all numMatches to 0
+    if (threadId <= numInputLines) {
+        int sizeOfMatchArr = 10; // 10 for now... then dynamically increase if needed
+        allMatches[threadId] = new matchLocation[sizeOfMatchArr]; // store the matches at the index for this thread
         for (int j = 0; j < numPatternLines; j++) {
             int pos = 0;
             string jPatternLine(patternLines[j], patternLines[j] + lenPatternLines-1);
-            string iInputLine(inputLines[i], inputLines[i] + lenInputLines-1);
+            string iInputLine(inputLines[threadId], inputLines[threadId] + lenInputLines-1);
             int found = iInputLine.find(jPatternLine, pos);
             while (found != string::npos) {
-                if (numMatches >= sizeOfMatchArr) {
+                if (numMatchesArr[threadId] >= sizeOfMatchArr) {
                     // increase matchArr size 
                     int biggerSize = sizeOfMatchArr * 2;
                     matchLocation* biggerArr = new matchLocation[biggerSize];
-                    memcpy(biggerArr, matchArr, sizeof(matchLocation) * numMatches);
+                    memcpy(biggerArr, matchArr, sizeof(matchLocation) * numMatchesArr[threadId]);
                     delete[] matchArr;
                     matchArr = biggerArr;
                     sizeOfMatchArr = biggerSize;
                 }
                 // store the match
-                int calculatedRealLineNum = i + rank + i * (world_size - 1);
-                struct matchLocation m = { calculatedRealLineNum, found, j }; // where i is the row number, found is the col number, and j is the pattern line number
-                matchArr[numMatches] = m;
+                struct matchLocation m = { threadId, found, j }; // where threadId is the row number, found is the col number, and j is the pattern line number
+                matchArr[numMatchesArr[threadId]] = m;
                 // update pos, numMatches, and found for the next iteration
                 pos = found + 1;
-                numMatches++; // TODO use atomic cuda increment
+                numMatchesArr[threadId]++; // TODO use atomic cuda increment
                 found = iInputLine.find(jPatternLine, pos);
             }
         }
@@ -162,7 +162,15 @@ int main(int argc, char** argv) {
 
     // set the number of blocks and number of threads we want to use
     int numBlocks = 1;
-    int numThreads = 1; 
+    int numThreads = 32;
+    // guessing how to compute this... - maybe for smaller test files we can change this around but for larger it needs to be set
+    // if (numInputLines <= 1024) {
+    //     numThreads = numInputLines; // according to the internet, 1024 is the max number of threads in a block
+    // } else {
+    //     numBlocks = ; // ???
+    //     numThreads = ; // ???
+    // }
+    int totalNumThreads = numBlocks * numThreads;
 
     // setup pointers to get the results from device memory in allMatchLocations and numMatchesArr
     matchLocation** allMatchLocationsDevice;
@@ -170,22 +178,22 @@ int main(int argc, char** argv) {
 
     int* numMatchesArrDevice;
     cudaMalloc(&numMatchesArrDevice, numBlocks * sizeof(int)); 
-    int zero = 0;
     for (int i = 0; i < numBlocks; i++) {
         cudaMalloc(&numMatchesArrDevice[i], numBlocks * sizeof(int)); 
-        cudaMemcpy(numMatchesArrDevice[i], &zero, sizeof(int), cudaMemcpyHostToDevice); // initialize on device to 0
     }
 
     // start the kernel to find partial matches
-    findPartialMatches<<<numBlocks,numThreads>>>(inputLinesDevice, patternLinesDevice, &numInputLines, &lenInputLines, &numPatternLines, &lenPatternLines, allMatchLocationsDevice, numMatchesArrDevice);
+    findPartialMatches<<<numBlocks,numThreads>>>(inputLinesDevice, patternLinesDevice, &numInputLines, &lenInputLines, &numPatternLines, &lenPatternLines, allMatchLocationsDevice, numMatchesArrDevice, &numThreads);
 
     // copy the results to host memory
-    int* numMatchesArr = new int[numBlocks];
-    matchLocation** allMatchLocations = new matchLocation * [numBlocks];
+    int* numMatchesArr = new int[totalNumThreads];
+    matchLocation** allMatchLocations = new matchLocation * [totalNumThreads];
 
-    for (int i = 0; i < numBlocks; i++) {
+    for (int i = 0; i < totalNumThreads; i++) {
         cudaMemcpy(numMatchesArrDevice[i], numMatchesArr[i], sizeof(int), cudaMemcpyDeviceToHost);
-        cudaMemcpy(allMatchLocationsDevice[i], allMatchLocations[i], numMatchesArr[i] * (matchLocation*), cudaMemcpyDeviceToHost);
+        if (numMatchesArr[i] > 0) {
+            cudaMemcpy(allMatchLocationsDevice[i], allMatchLocations[i], numMatchesArr[i] * (matchLocation*), cudaMemcpyDeviceToHost);
+        }
     }
     
 
@@ -222,38 +230,28 @@ int main(int argc, char** argv) {
         }
     }
     outputFile.close();
-        // cleanup for just node 0 things
-        // for (int i = 0; i < world_size; i++) {
-        //     delete[] allMatchLocations[i];
-        // }
-        // delete[] allMatchLocations;
-        // delete[] coordArr;
-        // delete[] numMatchesArr;
-    
-
-    // cleanup for all nodes
-    // for (int i = 0; i < numPatternLines; i++) {
-    //     delete[] patternLines[i];
-    // }
-    // delete[] patternLines;
-    // if (rank != 0) {
-    //     for (int i = 0; i < numLinesPerNode; i++) {
-    //         delete[] INInputLines[i]; // don't need to do for rank 0 because it was done when we deleted inputLines
-    //     }
-    //     delete[] matchArr; // don't need for rank 0 bc it's in allMatchLocations which we already deleted
-    // }
-    // else {
-    //     for (int i = 0; i < numInputLines; i++) {
-    //         delete[] inputLines[i];
-    //     }
-    //     delete[] inputLines;
-    // }
-
-    // free(lenInputLinesPtr);
-    // free(lenPatternLinesPtr);
-    // free(numInputLinesPtr);
-    // free(numPatternLinesPtr);
-
+    // cleanup memory 
+    for (int i = 0; i < numInputLines; i++) {
+        cudaFree(inputLinesDevice[i]);
+        delete[] inputLines[i];
+    }
+    delete[] inputLines;
+    cudaFree(inputLinesDevice);
+    for (int i = 0; i < numPatternLines; i++) {
+        cudaFree(patternLinesDevice[i]);
+        delete[] patternLines[i];
+    }
+    delete[] patternLines;
+    cudaFree(patternLinesDevice);
+    for (int i = 0; i < totalNumThreads; i++) {
+        cudaFree(allMatchLocationsDevice[i]);
+        delete[] allMatchLocations[i];
+    }
+    delete[] allMatchLocations;
+    cudaFree(allMatchLocationsDevice);
+    delete[] numMatchesArr;
+    cudaFree(numMatchesArrDevice);
+    delete[] coordArr;
 
     return 0;
 }
