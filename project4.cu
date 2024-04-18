@@ -71,10 +71,12 @@ matchCoordinate searchForRealMatches(matchLocation match, matchLocation** allMat
     return retVal;
 }
 
-__device__ void findSubStr(char*str, int strLen, char* subStr, int subStrLen, int pos, int*foundPos) {
-    printf("in meth");
-    printf("-> findSubStr strLen %d, subStrLen %d, pos %d", strLen, subStrLen, pos);
-    *foundPos = -1; // initialize to -1 to assume not found
+__device__ void findSubStr(char*str, int row, int strLen, char* subStr, int patternLineNum, int subStrLen, int pos, int*foundPos) {
+    printf("-> findSubStr row %d, strLen %d, patternLineNum %d, subStrLen %d, pos %d\n", row, strLen, patternLineNum, subStrLen, pos);
+    *foundPos = -1; // initialize to -1 to assume not found // TODO this causes memory problem - maybe need some sort of malloc type thing here
+    printf("hi");
+    printf("difference is \n", strLen-subStrLen);
+
     for (int i = pos; i <= strLen - subStrLen; i++) {
         printf("i is %d", i);
         bool found = true;
@@ -93,15 +95,17 @@ __device__ void findSubStr(char*str, int strLen, char* subStr, int subStrLen, in
     }
 }
 
-__global__ void findPartialMatches(char** inputLines, char** patternLines, int* numInputLines, int* lenInputLines, int* numPatternLines, int* lenPatternLines, int* numMatchesArr, matchLocation** allMatches) {
+__global__ void findPartialMatches(char* inputLines, char* patternLines, int* numInputLines, int* lenInputLines, int* numPatternLines, int* lenPatternLines, int* numMatchesArr, matchLocation** allMatches) {
 //    printf("HELLO FROM KERNEL!\n");
     int threadId = threadIdx.x + blockIdx.x * blockDim.x;
-    printf("tmg2 numinputlines %d, numpattern lines %d", numInputLines, numPatternLines); // TODO these are currently wrong
-//    printf("Tmg3\n");
+    int threadIndex = threadId * *lenInputLines;
+    printf("tmg numinputlines %d, numpattern lines %d", *numInputLines, *numPatternLines); 
+    printf("tMg leninputlines %d, lenpattern lines %d", *lenInputLines, *lenPatternLines); 
+    printf("Tmg thread id is %d and index is %d\n", threadId, threadIndex);
     numMatchesArr[threadId] = 0; // initialize all numMatches to 0
     printf("tmg1\n");
     if (threadId <= *numInputLines) {
-        printf("de did numinputlines");
+        //printf("de did numinputlines\n");
        // int sizeOfMatchArr = 10; // 10 for now... then dynamically increase if needed
         //allMatches[threadId] = new matchLocation[sizeOfMatchArr]; // store the matches at the index for this thread
         for (int j = 0; j < *numPatternLines; j++) {
@@ -111,7 +115,7 @@ __global__ void findPartialMatches(char** inputLines, char** patternLines, int* 
             //int found = iInputLine.find(jPatternLine, pos);
             int* found;
 //            findSubStr(inputLines[threadId], *lenInputLines - 1, patternLines[j], *lenPatternLines - 1, 0, found);
-            findSubStr(inputLines[threadId], *lenInputLines - 1, patternLines[j], *lenPatternLines - 1, 0, found); // idk if these -1 are needed in this implementation
+            findSubStr(inputLines, threadId, *lenInputLines - 1, patternLines, j, *lenPatternLines - 1, 0, found); // idk if these -1 are needed in this implementation
             printf("after find");
             while (*found != -1) {
                 // store the match
@@ -121,7 +125,7 @@ __global__ void findPartialMatches(char** inputLines, char** patternLines, int* 
                 pos = *found + 1;
                 numMatchesArr[threadId]++;
   //              findSubStr(inputLines[threadId], *lenInputLines - 1, patternLines[j], *lenPatternLines - 1, pos, found);
-                findSubStr(inputLines[threadId], *lenInputLines - 1, patternLines[j], *lenPatternLines - 1, pos, found);
+                findSubStr(inputLines, threadId,  *lenInputLines - 1, patternLines, j, *lenPatternLines - 1, pos, found);
             }
         }
     }
@@ -166,43 +170,49 @@ int main(int argc, char** argv) {
         strcpy_s(patternLines[lineNum], lenPatternLines, line.c_str());
         lineNum++;
     }
-
+    cout << "numinput lines is " << numInputLines << " and num pattern lines is " << numPatternLines << endl;
     cout << "about to allocate mem for inputLines and patternlines" << endl;
     // allocate memory on device for inputLines and patternLines and copy to the device memory
-    char** inputLinesDevice;
-    cudaMalloc(&inputLinesDevice, numInputLines * sizeof(char*));
+    char* inputLinesDevice;
+    cudaMalloc((void**) & inputLinesDevice, lenInputLines * numInputLines * sizeof(char)); // inputLinesDevice will be the 2d array flattened 
     cout << "cudamalloc for inputLinesDevice done" << endl;
-    cudaMemcpy(inputLinesDevice, inputLines, numInputLines * sizeof(char*), cudaMemcpyHostToDevice);
+    cudaMemcpy(&inputLinesDevice, inputLines, lenInputLines *  numInputLines * sizeof(char), cudaMemcpyHostToDevice);
     cout << "cudaMemcpy for inputLinesDevice done" << endl;
-    for (int i = 0; i < numInputLines; i++) {
-        cudaMalloc(&inputLinesDevice[i], lenInputLines * sizeof(char));
+  /*  for (int i = 0; i < numInputLines; i++) {
+        cout << " in loo i is " << i << endl;
+        cudaMalloc((void**) & (inputLinesDevice[i]), lenInputLines * sizeof(char));
+        cout << " malloc not to memcpy" << endl;
         cudaMemcpy(inputLinesDevice[i], inputLines[i], lenInputLines * sizeof(char), cudaMemcpyHostToDevice);
-    }
+    }*/
+   // size_t inputPitch;
+    //cudaMallocPitch((void**)inputLinesDevice, &inputPitch,  lenInputLines * sizeof(char), numInputLines);
+    //size_t spitch = numPatternLines * lenInputLines *sizeof(char);
+    //cudaMemcpy2DToArray((void**)inputLinesDevice, 0, 0, inputLines, spitch, lenPatternLines * sizeof(char), numInputLines, cudaMemcpyHostToDevice);
     cout << "malloc and memcpy done for each line of input" << endl;
-    char** patternLinesDevice;
+    char* patternLinesDevice;
     cout << "about to malloc pattern" << endl;
-    cudaMalloc(&patternLinesDevice, numPatternLines * sizeof(char*));
+    cudaMalloc((void**) & patternLinesDevice, lenPatternLines * numPatternLines * sizeof(char));
     cout << "after malloc 1" << endl;
-    cudaMemcpy(patternLinesDevice, patternLines, numPatternLines * sizeof(char*), cudaMemcpyHostToDevice);
+    cudaMemcpy(patternLinesDevice, patternLines, lenPatternLines * numPatternLines * sizeof(char), cudaMemcpyHostToDevice);
     cout << "after memcpy1" << endl;
-    for (int i = 0; i < numPatternLines; i++) {
+   /* for (int i = 0; i < numPatternLines; i++) {
         cudaMalloc(&patternLinesDevice[i], lenPatternLines * sizeof(char));
         cudaMemcpy(patternLinesDevice[i], patternLines[i], lenPatternLines * sizeof(char), cudaMemcpyHostToDevice);
     }
     cout << "same done for pattern" << endl;
-
+    */
     //allocate memory for the length and num of lines for both files 
     int* numInputLinesDevice;
-    cudaMalloc(&numInputLinesDevice, sizeof(int));
-    cudaMemcpy((void*)numInputLinesDevice, (void*) & numInputLines, sizeof(int), cudaMemcpyHostToDevice);
+    cudaMalloc((void**) & numInputLinesDevice, sizeof(int));
+    cudaMemcpy(numInputLinesDevice, & numInputLines, sizeof(int), cudaMemcpyHostToDevice);
     int* lenInputLinesDevice;
-    cudaMalloc(&lenInputLinesDevice, sizeof(int));
+    cudaMalloc((void**) & lenInputLinesDevice, sizeof(int));
     cudaMemcpy((void*)lenInputLinesDevice, &lenInputLines, sizeof(int), cudaMemcpyHostToDevice);
     int* numPatternLinesDevice;
-    cudaMalloc(&numPatternLinesDevice, sizeof(int));
+    cudaMalloc((void**) & numPatternLinesDevice, sizeof(int));
     cudaMemcpy((void*)numPatternLinesDevice, &numPatternLines, sizeof(int), cudaMemcpyHostToDevice);
     int* lenPatternLinesDevice;
-    cudaMalloc(&lenPatternLinesDevice, sizeof(int));
+    cudaMalloc((void**) & lenPatternLinesDevice, sizeof(int));
     cudaMemcpy((void*)lenPatternLinesDevice, &lenPatternLines, sizeof(int), cudaMemcpyHostToDevice);
 
     // set the number of blocks and number of threads we want to use
@@ -289,13 +299,13 @@ int main(int argc, char** argv) {
     outputFile.close();
     // cleanup memory 
     for (int i = 0; i < numInputLines; i++) {
-        cudaFree(inputLinesDevice[i]);
+//        cudaFree(inputLinesDevice[i]);
         delete[] inputLines[i];
     }
     delete[] inputLines;
     cudaFree(inputLinesDevice);
     for (int i = 0; i < numPatternLines; i++) {
-        cudaFree(patternLinesDevice[i]);
+ //       cudaFree(patternLinesDevice[i]);
         delete[] patternLines[i];
     }
     delete[] patternLines;
