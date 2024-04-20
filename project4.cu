@@ -38,33 +38,32 @@ fileinfo getFileInfo(string filename) {
 
 //Returns the upper leftmost coordinate of a full match, otherwise return null if no full match.
 
-matchCoordinate searchForRealMatches(matchLocation match, matchLocation** allMatches, int* numMatchesArr, int numPatternLines, int totalNumThreads) {
+matchCoordinate searchForRealMatches(matchLocation match, matchLocation* allMatches, int numMatches, int numPatternLines, int totalNumThreads) {
     //cout << "-> searchForRealMAtches x:" << match.x << " y: " << match.y << " pl: " << match.pl << endl;
     matchLocation** patternMatchLocations = new matchLocation * [numPatternLines];
     for (int i = 0; i < numPatternLines; i++) patternMatchLocations[i] = nullptr;
 
     patternMatchLocations[match.pl] = &match;
-    for (int i = 0; i < totalNumThreads; i++) {
-        for (int j = 0; j < numMatchesArr[i]; j++) {
-            bool fullMatch = true;
-            // for each match...
-            if (allMatches[i][j].y == match.y && allMatches[i][j].x != match.x && allMatches[i][j].pl != match.pl) {
-                // if it's in the correct column
-                for (int k = 0; k < numPatternLines; k++) {
-                    if (allMatches[i][j].x == match.x + k && allMatches[i][j].pl == match.pl + k) {
-                        // this is a corresponding match!
-                        patternMatchLocations[allMatches[i][j].pl] = &allMatches[i][j];
-                    }
-                    // check if full match 
-                    if (patternMatchLocations[k] == nullptr) fullMatch = false;
+    for (int i = 0; i < numMatches; i++) {
+        bool fullMatch = true;
+        // for each match...
+        if (allMatches[i].y == match.y && allMatches[i].x != match.x && allMatches[i].pl != match.pl) {
+            // if it's in the correct column
+            for (int k = 0; k < numPatternLines; k++) {
+                if (allMatches[i].x == match.x + k && allMatches[i].pl == match.pl + k) {
+                    // this is a corresponding match!
+                    patternMatchLocations[allMatches[i].pl] = &allMatches[i];
                 }
-                if (fullMatch) {
-                    struct matchCoordinate retVal = { patternMatchLocations[0]->x, patternMatchLocations[0]->y };
-                    delete[] patternMatchLocations;
-                    return retVal;
-                }
+                // check if full match 
+                if (patternMatchLocations[k] == nullptr) fullMatch = false;
+            }
+            if (fullMatch) {
+                struct matchCoordinate retVal = { patternMatchLocations[0]->x, patternMatchLocations[0]->y };
+                delete[] patternMatchLocations;
+                return retVal;
             }
         }
+       
     }
     // return -1, -1 if no match found 
     struct matchCoordinate retVal = { -1, -1 };
@@ -220,7 +219,7 @@ int main(int argc, char** argv) {
     matchLocation* allMatchLocations = new matchLocation[numMatches];
     cudaMemcpy(allMatchLocations, allMatchLocationsDevice, numMatches * sizeof(matchLocation), cudaMemcpyDeviceToHost);
 
-    /*
+
     // prep the output file 
     ofstream outputFile("output.txt");
 
@@ -228,30 +227,28 @@ int main(int argc, char** argv) {
     int sizeOfCoordArr = 10; // 10 for now... then dynamically increase if needed
     matchCoordinate* coordArr = new matchCoordinate[sizeOfCoordArr];
     int numCoords = 0;
-    for (int i = 0; i < numBlocks; i++) {
-        for (int j = 0; j < numMatchesArr[i]; j++) {
-            matchCoordinate coor = searchForRealMatches(allMatchLocations[i][j], allMatchLocations, numMatchesArr, numPatternLines, totalNumThreads);
-            if (coor.x == -1 && coor.y == -1) continue; // not a match
-            bool alreadyFound = false;
-            for (int k = 0; k < numCoords; k++) {
-                if (coordArr[k].x == coor.x && coordArr[k].y == coor.y) alreadyFound = true;
-            }
-            if (alreadyFound) continue; // go to next match
-            if (numCoords >= sizeOfCoordArr) {
-                // increase coordArr size 
-                int biggerSize = sizeOfCoordArr * 2;
-                matchCoordinate* biggerArr = new matchCoordinate[biggerSize];
-                memcpy(biggerArr, coordArr, sizeof(matchCoordinate) * numCoords);
-                delete[] coordArr;
-                coordArr = biggerArr;
-                sizeOfCoordArr = biggerSize;
-            }
-            coordArr[numCoords] = coor;
-            numCoords++;
-            cout << "MATCH AT: " << coor.x << ", " << coor.y << endl;
-            // output as column, row and ensure the coordinates are not 0 indexed
-            outputFile << coor.y + 1 << ", " << coor.x + 1 << "\n";
+    for (int i = 0; i < numMatches; i++) {
+        matchCoordinate coor = searchForRealMatches(allMatchLocations[i], allMatchLocations, numMatches, numPatternLines, totalNumThreads);
+        if (coor.x == -1 && coor.y == -1) continue; // not a match
+        bool alreadyFound = false;
+        for (int k = 0; k < numCoords; k++) {
+            if (coordArr[k].x == coor.x && coordArr[k].y == coor.y) alreadyFound = true;
         }
+        if (alreadyFound) continue; // go to next match
+        if (numCoords >= sizeOfCoordArr) {
+            // increase coordArr size 
+            int biggerSize = sizeOfCoordArr * 2;
+            matchCoordinate* biggerArr = new matchCoordinate[biggerSize];
+            memcpy(biggerArr, coordArr, sizeof(matchCoordinate) * numCoords);
+            delete[] coordArr;
+            coordArr = biggerArr;
+            sizeOfCoordArr = biggerSize;
+        }
+        coordArr[numCoords] = coor;
+        numCoords++;
+        cout << "MATCH AT: " << coor.x << ", " << coor.y << endl;
+        // output as column, row and ensure the coordinates are not 0 indexed
+        outputFile << coor.y + 1 << ", " << coor.x + 1 << "\n";
     }
     outputFile.close();
     // cleanup memory 
@@ -267,16 +264,15 @@ int main(int argc, char** argv) {
     }
     delete[] patternLines;
     cudaFree(patternLinesDevice);
-    for (int i = 0; i < totalNumThreads; i++) {
-        cudaFree(allMatchLocationsDevice[i]);
-        delete[] allMatchLocations[i];
-    }
+  //  for (int i = 0; i < totalNumThreads; i++) {
+   //     cudaFree(allMatchLocationsDevice[i]);
+   ///     delete[] allMatchLocations[i];
+   // }
     delete[] allMatchLocations;
     cudaFree(allMatchLocationsDevice);
-    delete[] numMatchesArr;
+   // delete[] numMatchesArr;
     cudaFree(numMatchesArrDevice);
     delete[] coordArr;
-    */
+
     return 0;
 }
-
