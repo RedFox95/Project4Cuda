@@ -71,13 +71,11 @@ matchCoordinate searchForRealMatches(matchLocation match, matchLocation* allMatc
 }
 
 __device__ void findSubStr(char*str, int row, int strLen, char* subStr, int patternLineNum, int subStrLen, int pos, int*foundPos) {
-    printf("-> findSubStr row %d, strLen %d, patternLineNum %d, subStrLen %d, pos %d\n", row, strLen, patternLineNum, subStrLen, pos);
+    //printf("-> findSubStr row %d, strLen %d, patternLineNum %d, subStrLen %d, pos %d\n", row, strLen, patternLineNum, subStrLen, pos);
     *foundPos = -1; // assume no match found
     for (int i = pos; i <= strLen - subStrLen; i++) {
-        //printf("r %d: i is %d\n", row, i);
         bool found = true;
         for (int j = 0; j < subStrLen; j++) {
-            //printf("r %d: j is %d and i+j is %d comparing %c vs %c\n", row, j, i + j, str[(row * strLen) + i + j], subStr[(patternLineNum * subStrLen)  + j]);
             if (str[(row*strLen) + i + j] != subStr[(patternLineNum * subStrLen)+j]) {
                 found = false;
                 break;
@@ -85,7 +83,6 @@ __device__ void findSubStr(char*str, int row, int strLen, char* subStr, int patt
         }
         if (found) {
             *foundPos = i;
-            //printf("r %d: FOUND match in device foundPos is %d\n", row, *foundPos);
             break;
         }
     }
@@ -204,17 +201,10 @@ int main(int argc, char** argv) {
 
     // start the kernel to find partial matches
     findPartialMatches<<<numBlocks,numThreads>>>(inputLinesDevice, patternLinesDevice, numInputLinesDevice, lenInputLinesDevice, numPatternLinesDevice, lenPatternLinesDevice, numMatchesArrDevice, allMatchLocationsDevice);
-    cout << "after kernel exec (not necessarily done)" << endl;
     cudaDeviceSynchronize();
-    cout << "after sync" << endl;
-    cudaError_t err = cudaGetLastError();
-    cout << "got last err" << endl;
-    cout << err << endl;
     // copy the results to host memory
     int numMatches;
-    cout << " about to memcpy" << endl;
     cudaMemcpy(&numMatches, numMatchesArrDevice, sizeof(int), cudaMemcpyDeviceToHost);
-    cout << "num mathces is " << numMatches << endl;
 
     matchLocation* allMatchLocations = new matchLocation[numMatches];
     cudaMemcpy(allMatchLocations, allMatchLocationsDevice, numMatches * sizeof(matchLocation), cudaMemcpyDeviceToHost);
