@@ -73,23 +73,26 @@ matchCoordinate searchForRealMatches(matchLocation match, matchLocation** allMat
 
 __device__ void findSubStr(char*str, int row, int strLen, char* subStr, int patternLineNum, int subStrLen, int pos, int*foundPos) {
     printf("-> findSubStr row %d, strLen %d, patternLineNum %d, subStrLen %d, pos %d\n", row, strLen, patternLineNum, subStrLen, pos);
-    *foundPos = -1; // initialize to -1 to assume not found // TODO this causes memory problem - maybe need some sort of malloc type thing here
-    printf("hi");
-    printf("difference is \n", strLen-subStrLen);
+    //*foundPos = -1; // initialize to -1 to assume not found // TODO this causes memory problem - maybe need some sort of malloc type thing here
+    printf("r %d: difference is %d \n", row, strLen-subStrLen);
 
     for (int i = pos; i <= strLen - subStrLen; i++) {
-        printf("i is %d", i);
+        printf("r %d: i is %d\n", row, i);
         bool found = true;
         for (int j = 0; j < subStrLen; j++) {
-            printf("j is %d and i+j is %d", i, i + j);
-            if (str[i + j] != subStr[j]) {
+            printf("r %d: j is %d and i+j is %d comparing %c vs %c\n", row, j, i + j, str[(row * strLen) + i + j], subStr[j]);
+            if (str[(row*strLen) + i + j] != subStr[j]) {
+                printf("r %d: not a match\n", row);
                 found = false;
                 break;
+            }
+            else {
+                printf("r %d: part of a match!\n", row);
             }
         }
         if (found) {
             *foundPos = i;
-            printf("found match in device");
+            printf("r %d: FOUND match in device foundPos is %d\n", row, *foundPos);
             break;
         }
     }
@@ -99,12 +102,12 @@ __global__ void findPartialMatches(char* inputLines, char* patternLines, int* nu
 //    printf("HELLO FROM KERNEL!\n");
     int threadId = threadIdx.x + blockIdx.x * blockDim.x;
     int threadIndex = threadId * *lenInputLines;
-    printf("tmg numinputlines %d, numpattern lines %d", *numInputLines, *numPatternLines); 
-    printf("tMg leninputlines %d, lenpattern lines %d", *lenInputLines, *lenPatternLines); 
+    printf("tmg numinputlines %d, numpattern lines %d\n", *numInputLines, *numPatternLines); 
+    printf("tMg leninputlines %d, lenpattern lines %d\n", *lenInputLines, *lenPatternLines); 
     printf("Tmg thread id is %d and index is %d\n", threadId, threadIndex);
     numMatchesArr[threadId] = 0; // initialize all numMatches to 0
     printf("tmg1\n");
-    if (threadId <= *numInputLines) {
+    if (threadId < *numInputLines) {
         //printf("de did numinputlines\n");
        // int sizeOfMatchArr = 10; // 10 for now... then dynamically increase if needed
         //allMatches[threadId] = new matchLocation[sizeOfMatchArr]; // store the matches at the index for this thread
@@ -113,19 +116,23 @@ __global__ void findPartialMatches(char* inputLines, char* patternLines, int* nu
             //string jPatternLine(patternLines[j], patternLines[j] + *lenPatternLines - 1);
             //string iInputLine(inputLines[threadId], inputLines[threadId] + *lenInputLines - 1);
             //int found = iInputLine.find(jPatternLine, pos);
-            int* found;
+            int found = -1;
 //            findSubStr(inputLines[threadId], *lenInputLines - 1, patternLines[j], *lenPatternLines - 1, 0, found);
-            findSubStr(inputLines, threadId, *lenInputLines - 1, patternLines, j, *lenPatternLines - 1, 0, found); // idk if these -1 are needed in this implementation
-            printf("after find");
-            while (*found != -1) {
+            findSubStr(inputLines, threadId, *lenInputLines, patternLines, j, *lenPatternLines, 0, &found); // idk if these -1 are needed in this implementation
+            printf("tId %d: after find found is %d\n", threadId, found);
+            while (found != -1) {
                 // store the match
-                struct matchLocation m = { threadId, *found, j }; // where threadId is the row number, found is the col number, and j is the pattern line number
+                struct matchLocation m = { threadId, found, j }; // where threadId is the row number, found is the col number, and j is the pattern line number
+                printf("tID %d: made the matchLocation\n", threadId);
+                printf("tID %d: allmatches arr storing in [%d][%d]\n", threadId, threadId, numMatchesArr[threadId]);
                 allMatches[threadId][numMatchesArr[threadId]] = m;
+                printf("tId %d: after storing matchlocation\n", threadId);
                 // update pos, numMatches, and found for the next iteration
-                pos = *found + 1;
+                pos = found + 1;
                 numMatchesArr[threadId]++;
+                printf("tId %d: after incrementing nummatchesarr", threadId);
   //              findSubStr(inputLines[threadId], *lenInputLines - 1, patternLines[j], *lenPatternLines - 1, pos, found);
-                findSubStr(inputLines, threadId,  *lenInputLines - 1, patternLines, j, *lenPatternLines - 1, pos, found);
+                findSubStr(inputLines, threadId,  *lenInputLines, patternLines, j, *lenPatternLines, pos, &found);
             }
         }
     }
@@ -137,46 +144,72 @@ int main(int argc, char** argv) {
     string inputFile = argv[1];
     fileinfo inputInfo = getFileInfo(inputFile);
     int numInputLines = inputInfo.numLines;
-    int lenInputLines = inputInfo.lineLength + 1;
+    int lenInputLines = inputInfo.lineLength;
 
     // read the input file in line by line and store in array
     ifstream file(inputFile);
     char** inputLines = new char* [numInputLines]; // num rows (lines)
     for (int i = 0; i < numInputLines; i++) {
-        inputLines[i] = new char[lenInputLines]; // num cols (line length)
+        inputLines[i] = new char[lenInputLines+1]; // num cols (line length)
     }
+
+    // temp test..
+    char* inputLine1d = new char[numInputLines * lenInputLines];
+    cout << " length of 1d arr is " << numInputLines * lenInputLines  << endl;
 
     string line;
     int lineNum = 0; // for indexing into the allLines arr
     while (getline(file, line)) {
-        strcpy_s(inputLines[lineNum], lenInputLines, line.c_str());
+        strcpy_s(inputLines[lineNum], lenInputLines+1, line.c_str());
+        cout << inputLines[lineNum] << endl;
+        for (int i = 0; i < lenInputLines; i++) {
+            cout << "inserting " << line.c_str()[i] << " at " << (lineNum * lenInputLines) + i << endl;
+            inputLine1d[(lineNum * lenInputLines) + i] = line.c_str()[i];
+        }
+        
         lineNum++;
     }
-
+    for (int i = 0; i < numInputLines * lenInputLines; i++) {
+        cout << inputLine1d[i];
+    }
+    cout << "\nthat was it " << endl;
     // get info about the pattern file
     string patternFile = argv[2];
     fileinfo patternInfo = getFileInfo(patternFile);
     int numPatternLines = patternInfo.numLines;
-    int lenPatternLines = patternInfo.lineLength + 1;
+    int lenPatternLines = patternInfo.lineLength;
 
     // read the pattern file in line by line and store in array
     ifstream patternFileStream(patternFile);
     char** patternLines = new char* [numPatternLines]; // num rows (lines)
     for (int i = 0; i < numPatternLines; i++) {
-        patternLines[i] = new char[lenPatternLines]; // num cols (line length)
+        patternLines[i] = new char[lenPatternLines+1]; // num cols (line length)
     }
+    char* patternLine1d = new char[numPatternLines*lenPatternLines];
+    cout << " length of 1d arr is " << numPatternLines * lenPatternLines << endl;
+
     lineNum = 0; // for indexing into the pattern arr
     while (getline(patternFileStream, line)) {
-        strcpy_s(patternLines[lineNum], lenPatternLines, line.c_str());
+        strcpy_s(patternLines[lineNum], lenPatternLines+1, line.c_str());
+        for (int i = 0; i < lenPatternLines; i++) {
+            cout << "inserting " << line.c_str()[i] << " at " << (lineNum * lenPatternLines) + i << endl;
+            patternLine1d[(lineNum * lenPatternLines) + i] = line.c_str()[i];
+        }
         lineNum++;
     }
+    for (int i = 0; i < numPatternLines * lenPatternLines; i++) {
+        cout << patternLine1d[i];
+    }
+    cout << "\nthat was it " << endl;
     cout << "numinput lines is " << numInputLines << " and num pattern lines is " << numPatternLines << endl;
     cout << "about to allocate mem for inputLines and patternlines" << endl;
     // allocate memory on device for inputLines and patternLines and copy to the device memory
     char* inputLinesDevice;
-    cudaMalloc((void**) & inputLinesDevice, lenInputLines * numInputLines * sizeof(char)); // inputLinesDevice will be the 2d array flattened 
+  //  cudaMalloc((void**)&inputLinesDevice, lenInputLines * numInputLines * sizeof(char)); // inputLinesDevice will be the 2d array flattened 
+    cudaMalloc((void**)&inputLinesDevice, lenInputLines * numInputLines * sizeof(char)); // inputLinesDevice will be the 2d array flattened 
     cout << "cudamalloc for inputLinesDevice done" << endl;
-    cudaMemcpy(&inputLinesDevice, inputLines, lenInputLines *  numInputLines * sizeof(char), cudaMemcpyHostToDevice);
+  //  cudaMemcpy((void*)inputLinesDevice, (void*)inputLines, lenInputLines * numInputLines * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemcpy((void*)inputLinesDevice, (void*)inputLine1d, lenInputLines * numInputLines * sizeof(char), cudaMemcpyHostToDevice);
     cout << "cudaMemcpy for inputLinesDevice done" << endl;
   /*  for (int i = 0; i < numInputLines; i++) {
         cout << " in loo i is " << i << endl;
@@ -191,9 +224,11 @@ int main(int argc, char** argv) {
     cout << "malloc and memcpy done for each line of input" << endl;
     char* patternLinesDevice;
     cout << "about to malloc pattern" << endl;
-    cudaMalloc((void**) & patternLinesDevice, lenPatternLines * numPatternLines * sizeof(char));
+//    cudaMalloc((void**)&patternLinesDevice, lenPatternLines * numPatternLines * sizeof(char));
+    cudaMalloc((void**)&patternLinesDevice, lenPatternLines * numPatternLines * sizeof(char));
     cout << "after malloc 1" << endl;
-    cudaMemcpy(patternLinesDevice, patternLines, lenPatternLines * numPatternLines * sizeof(char), cudaMemcpyHostToDevice);
+//    cudaMemcpy((void*)patternLinesDevice, (void*)patternLines, lenPatternLines * numPatternLines * sizeof(char), cudaMemcpyHostToDevice);
+    cudaMemcpy((void*)patternLinesDevice, (void*)patternLine1d, lenPatternLines * numPatternLines * sizeof(char), cudaMemcpyHostToDevice);
     cout << "after memcpy1" << endl;
    /* for (int i = 0; i < numPatternLines; i++) {
         cudaMalloc(&patternLinesDevice[i], lenPatternLines * sizeof(char));
@@ -322,3 +357,4 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
