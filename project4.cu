@@ -74,14 +74,14 @@ matchCoordinate searchForRealMatches(matchLocation match, matchLocation** allMat
 __device__ void findSubStr(char*str, int row, int strLen, char* subStr, int patternLineNum, int subStrLen, int pos, int*foundPos) {
     printf("-> findSubStr row %d, strLen %d, patternLineNum %d, subStrLen %d, pos %d\n", row, strLen, patternLineNum, subStrLen, pos);
     //*foundPos = -1; // initialize to -1 to assume not found // TODO this causes memory problem - maybe need some sort of malloc type thing here
-    printf("r %d: difference is %d \n", row, strLen-subStrLen);
-
+    //printf("r %d: difference is %d \n", row, strLen-subStrLen);
+    *foundPos = -1; // assume no match found
     for (int i = pos; i <= strLen - subStrLen; i++) {
         printf("r %d: i is %d\n", row, i);
         bool found = true;
         for (int j = 0; j < subStrLen; j++) {
-            printf("r %d: j is %d and i+j is %d comparing %c vs %c\n", row, j, i + j, str[(row * strLen) + i + j], subStr[j]);
-            if (str[(row*strLen) + i + j] != subStr[j]) {
+            printf("r %d: j is %d and i+j is %d comparing %c vs %c\n", row, j, i + j, str[(row * strLen) + i + j], subStr[(patternLineNum * subStrLen)  + j]);
+            if (str[(row*strLen) + i + j] != subStr[(patternLineNum * subStrLen)+j]) {
                 printf("r %d: not a match\n", row);
                 found = false;
                 break;
@@ -98,7 +98,7 @@ __device__ void findSubStr(char*str, int row, int strLen, char* subStr, int patt
     }
 }
 
-__global__ void findPartialMatches(char* inputLines, char* patternLines, int* numInputLines, int* lenInputLines, int* numPatternLines, int* lenPatternLines, int* numMatchesArr, matchLocation** allMatches) {
+__global__ void findPartialMatches(char* inputLines, char* patternLines, int* numInputLines, int* lenInputLines, int* numPatternLines, int* lenPatternLines, int* numMatchesArr, matchLocation** allMatches, int*sizeArr) {
 //    printf("HELLO FROM KERNEL!\n");
     int threadId = threadIdx.x + blockIdx.x * blockDim.x;
     int threadIndex = threadId * *lenInputLines;
@@ -106,35 +106,52 @@ __global__ void findPartialMatches(char* inputLines, char* patternLines, int* nu
     printf("tMg leninputlines %d, lenpattern lines %d\n", *lenInputLines, *lenPatternLines); 
     printf("Tmg thread id is %d and index is %d\n", threadId, threadIndex);
     numMatchesArr[threadId] = 0; // initialize all numMatches to 0
-    printf("tmg1\n");
+    sizeArr[threadId] = 10; // initialize all array sizes to 10
+    printf("tId %d: nummatches set to %d and size set to %d\n", threadId, numMatchesArr[threadId], sizeArr[threadId]);
+    
+    allMatches[threadId] = new matchLocation[sizeArr[threadId]];
     if (threadId < *numInputLines) {
         //printf("de did numinputlines\n");
        // int sizeOfMatchArr = 10; // 10 for now... then dynamically increase if needed
         //allMatches[threadId] = new matchLocation[sizeOfMatchArr]; // store the matches at the index for this thread
         for (int j = 0; j < *numPatternLines; j++) {
+            printf("tId %d: in loop j is %d\n", threadId, j);
             int pos = 0;
             //string jPatternLine(patternLines[j], patternLines[j] + *lenPatternLines - 1);
             //string iInputLine(inputLines[threadId], inputLines[threadId] + *lenInputLines - 1);
             //int found = iInputLine.find(jPatternLine, pos);
             int found = -1;
 //            findSubStr(inputLines[threadId], *lenInputLines - 1, patternLines[j], *lenPatternLines - 1, 0, found);
+            printf("before calling findSubStr j is %d\n", j);
             findSubStr(inputLines, threadId, *lenInputLines, patternLines, j, *lenPatternLines, 0, &found); // idk if these -1 are needed in this implementation
-            printf("tId %d: after find found is %d\n", threadId, found);
+            printf("tId %d: after find found is %d and j is %d\n", threadId, found, j);
             while (found != -1) {
+                if (numMatchesArr[threadId] >= sizeArr[threadId]) {
+                    // increase matchArr size 
+                    size_t biggerSize = sizeArr[threadId] * 2;
+                    matchLocation* biggerArr = new matchLocation[biggerSize];
+                    memcpy(biggerArr, allMatches[threadId], sizeof(matchLocation) * numMatchesArr[threadId]);
+                    delete[] allMatches[threadId];
+                    allMatches[threadId] = biggerArr;
+                    sizeArr[threadId] = biggerSize;
+                }
                 // store the match
                 struct matchLocation m = { threadId, found, j }; // where threadId is the row number, found is the col number, and j is the pattern line number
                 printf("tID %d: made the matchLocation\n", threadId);
                 printf("tID %d: allmatches arr storing in [%d][%d]\n", threadId, threadId, numMatchesArr[threadId]);
                 allMatches[threadId][numMatchesArr[threadId]] = m;
-                printf("tId %d: after storing matchlocation\n", threadId);
+                printf("tId %d: after storing matchlocation and before incrementing num matches which is currenmtly %d\n", threadId, numMatchesArr[threadId]);
                 // update pos, numMatches, and found for the next iteration
                 pos = found + 1;
                 numMatchesArr[threadId]++;
-                printf("tId %d: after incrementing nummatchesarr", threadId);
+                printf("tId %d: after incrementing nummatchesarr to %d\n", threadId, numMatchesArr[threadId]);
   //              findSubStr(inputLines[threadId], *lenInputLines - 1, patternLines[j], *lenPatternLines - 1, pos, found);
+                printf("tId %d: abvout to call findSubStr again j is %d\n", threadId, j);
                 findSubStr(inputLines, threadId,  *lenInputLines, patternLines, j, *lenPatternLines, pos, &found);
             }
+            printf("tId %d: after while loop\n", threadId);
         }
+        printf("tId %d: after for loop\n", threadId);
     }
     printf("Thread %d num matches is %d\n", threadId, numMatchesArr[threadId]);
 }
@@ -272,6 +289,8 @@ int main(int argc, char** argv) {
     cout << "after malloc mathclocations device " << endl;
     int* numMatchesArrDevice;
     cudaMalloc(&numMatchesArrDevice, totalNumThreads * sizeof(int));
+    int* sizeArrDevice;
+    cudaMalloc(&sizeArrDevice, totalNumThreads * sizeof(int));
 //    cout << "after malloc num matches device " << endl; // idk if this is needed
 //    for (int i = 0; i < numBlocks; i++) {
 //        cout << i << endl;
@@ -279,7 +298,7 @@ int main(int argc, char** argv) {
 //    }
     cout << "about to start kernel" << endl;
     // start the kernel to find partial matches
-    findPartialMatches<<<numBlocks,numThreads>>>(inputLinesDevice, patternLinesDevice, numInputLinesDevice, lenInputLinesDevice, numPatternLinesDevice, lenPatternLinesDevice, numMatchesArrDevice, allMatchLocationsDevice);
+    findPartialMatches<<<numBlocks,numThreads>>>(inputLinesDevice, patternLinesDevice, numInputLinesDevice, lenInputLinesDevice, numPatternLinesDevice, lenPatternLinesDevice, numMatchesArrDevice, allMatchLocationsDevice, sizeArrDevice);
     cout << "after kernel exec (not necessarily done)" << endl;
     cudaDeviceSynchronize();
     cout << "after sync" << endl;
