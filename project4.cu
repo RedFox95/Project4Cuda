@@ -23,8 +23,7 @@ struct matchCoordinate {
 };
 
 
-//Get the fileinfo struct for this file, containing the number of lines and length of a line.
-
+// Get the fileinfo struct for this file, containing the number of lines and length of a line.
 fileinfo getFileInfo(string filename) {
     ifstream lineCounter(filename);
     int numLines = 0;
@@ -36,10 +35,8 @@ fileinfo getFileInfo(string filename) {
 }
 
 
-//Returns the upper leftmost coordinate of a full match, otherwise return null if no full match.
-
+// Returns the upper leftmost coordinate of a full match, otherwise return null if no full match.
 matchCoordinate searchForRealMatches(matchLocation match, matchLocation* allMatches, int numMatches, int numPatternLines, int totalNumThreads) {
-    //cout << "-> searchForRealMAtches x:" << match.x << " y: " << match.y << " pl: " << match.pl << endl;
     matchLocation** patternMatchLocations = new matchLocation * [numPatternLines];
     for (int i = 0; i < numPatternLines; i++) patternMatchLocations[i] = nullptr;
 
@@ -71,7 +68,6 @@ matchCoordinate searchForRealMatches(matchLocation match, matchLocation* allMatc
 }
 
 __device__ void findSubStr(char*str, int row, int strLen, char* subStr, int patternLineNum, int subStrLen, int pos, int*foundPos) {
-    //printf("-> findSubStr row %d, strLen %d, patternLineNum %d, subStrLen %d, pos %d\n", row, strLen, patternLineNum, subStrLen, pos);
     *foundPos = -1; // assume no match found
     for (int i = pos; i <= strLen - subStrLen; i++) {
         bool found = true;
@@ -90,21 +86,22 @@ __device__ void findSubStr(char*str, int row, int strLen, char* subStr, int patt
 
 __global__ void findPartialMatches(char* inputLines, char* patternLines, int* numInputLines, int* lenInputLines, int* numPatternLines, int* lenPatternLines, int* numMatches, matchLocation* allMatches) {
     int threadId = threadIdx.x + blockIdx.x * blockDim.x;
-    int threadIndex = threadId * *lenInputLines;
-    //printf("Tmg thread id is %d and index is %d\n", threadId, threadIndex);
-    if (threadId < *numInputLines) {
-        for (int j = 0; j < *numPatternLines; j++) {
-            int pos = 0;
-            int found = -1;
-            findSubStr(inputLines, threadId, *lenInputLines, patternLines, j, *lenPatternLines, 0, &found);
-            while (found != -1) {
-                // store the match
-                struct matchLocation m = { threadId, found, j }; // where threadId is the row number, found is the col number, and j is the pattern line number
-                int storingIndex = atomicAdd(numMatches, 1);
-                allMatches[storingIndex] = m;
-                // update pos, numMatches, and found for the next iteration
-                pos = found + 1;
-                findSubStr(inputLines, threadId,  *lenInputLines, patternLines, j, *lenPatternLines, pos, &found);
+    int stride = blockDim.x;
+    for (int i = threadId; i < *numInputLines; i += stride) {
+        if (i < *numInputLines) {
+            for (int j = 0; j < *numPatternLines; j++) {
+                int pos = 0;
+                int found = -1;
+                findSubStr(inputLines, i, *lenInputLines, patternLines, j, *lenPatternLines, 0, &found);
+                while (found != -1) {
+                    // store the match
+                    struct matchLocation m = { i, found, j }; // where i is the row number, found is the col number, and j is the pattern line number
+                    int storingIndex = atomicAdd(numMatches, 1);
+                    allMatches[storingIndex] = m;
+                    // update pos, numMatches, and found for the next iteration
+                    pos = found + 1;
+                    findSubStr(inputLines, i, *lenInputLines, patternLines, j, *lenPatternLines, pos, &found);
+                }
             }
         }
     }
@@ -119,23 +116,19 @@ int main(int argc, char** argv) {
 
     // read the input file in line by line and store in array
     ifstream file(inputFile);
-    char** inputLines = new char* [numInputLines]; // num rows (lines)
-    for (int i = 0; i < numInputLines; i++) {
-        inputLines[i] = new char[lenInputLines+1]; // num cols (line length)
-    }
 
-    // temp test..
+    // store the input file in a 1d char array
     char* inputLine1d = new char[numInputLines * lenInputLines];
 
     string line;
-    int lineNum = 0; // for indexing into the allLines arr
+    int lineNum = 0;
     while (getline(file, line)) {
-        strcpy_s(inputLines[lineNum], lenInputLines+1, line.c_str());
         for (int i = 0; i < lenInputLines; i++) {
             inputLine1d[(lineNum * lenInputLines) + i] = line.c_str()[i];
         }  
         lineNum++;
     }
+
     // get info about the pattern file
     string patternFile = argv[2];
     fileinfo patternInfo = getFileInfo(patternFile);
@@ -144,23 +137,21 @@ int main(int argc, char** argv) {
 
     // read the pattern file in line by line and store in array
     ifstream patternFileStream(patternFile);
-    char** patternLines = new char* [numPatternLines]; // num rows (lines)
-    for (int i = 0; i < numPatternLines; i++) {
-        patternLines[i] = new char[lenPatternLines+1]; // num cols (line length)
-    }
+
+    // store the pattern file in a 1d char array
     char* patternLine1d = new char[numPatternLines*lenPatternLines];
 
-    lineNum = 0; // for indexing into the pattern arr
+    lineNum = 0;
     while (getline(patternFileStream, line)) {
-        strcpy_s(patternLines[lineNum], lenPatternLines+1, line.c_str());
         for (int i = 0; i < lenPatternLines; i++) {
             patternLine1d[(lineNum * lenPatternLines) + i] = line.c_str()[i];
         }
         lineNum++;
     }
+
     // allocate memory on device for inputLines and patternLines and copy to the device memory
     char* inputLinesDevice;
-    cudaMalloc((void**)&inputLinesDevice, lenInputLines * numInputLines * sizeof(char)); // inputLinesDevice will be the 2d array flattened 
+    cudaMalloc((void**)&inputLinesDevice, lenInputLines * numInputLines * sizeof(char));
     cudaMemcpy((void*)inputLinesDevice, (void*)inputLine1d, lenInputLines * numInputLines * sizeof(char), cudaMemcpyHostToDevice);
     char* patternLinesDevice;
     cudaMalloc((void**)&patternLinesDevice, lenPatternLines * numPatternLines * sizeof(char));
@@ -181,34 +172,30 @@ int main(int argc, char** argv) {
     cudaMemcpy((void*)lenPatternLinesDevice, &lenPatternLines, sizeof(int), cudaMemcpyHostToDevice);
 
     // set the number of blocks and number of threads we want to use
-    int numBlocks = 1;
-    int numThreads = 10;
-    // guessing how to compute this... - maybe for smaller test files we can change this around but for larger it needs to be set
-    // if (numInputLines <= 1024) {
-    //     numThreads = numInputLines; // according to the internet, 1024 is the max number of threads in a block
-    // } else {
-    //     numBlocks = ; // ???
-    //     numThreads = ; // ???
-    // }
+    int numBlocks = 3;
+    int numThreads = 1024;
+
     int totalNumThreads = numBlocks * numThreads;
 
     // setup pointers to get the results from device memory in allMatchLocations and numMatchesArr
     matchLocation* allMatchLocationsDevice;
-    cudaMalloc(&allMatchLocationsDevice, 9999 * sizeof(matchLocation)); // temp.. limiting to 9999 partial matches
+    cudaMalloc(&allMatchLocationsDevice, 9999 * sizeof(matchLocation)); // limiting to 9999 partial matches...
     int* numMatchesArrDevice;
     cudaMalloc(&numMatchesArrDevice, sizeof(int));
     cudaMemset(numMatchesArrDevice, 0, 1); // initialize numMatches to 0
 
     // start the kernel to find partial matches
     findPartialMatches<<<numBlocks,numThreads>>>(inputLinesDevice, patternLinesDevice, numInputLinesDevice, lenInputLinesDevice, numPatternLinesDevice, lenPatternLinesDevice, numMatchesArrDevice, allMatchLocationsDevice);
+
+    // wait for all threads on device to finish
     cudaDeviceSynchronize();
+
     // copy the results to host memory
     int numMatches;
     cudaMemcpy(&numMatches, numMatchesArrDevice, sizeof(int), cudaMemcpyDeviceToHost);
 
     matchLocation* allMatchLocations = new matchLocation[numMatches];
     cudaMemcpy(allMatchLocations, allMatchLocationsDevice, numMatches * sizeof(matchLocation), cudaMemcpyDeviceToHost);
-
 
     // prep the output file 
     ofstream outputFile("output.txt");
@@ -236,31 +223,15 @@ int main(int argc, char** argv) {
         }
         coordArr[numCoords] = coor;
         numCoords++;
-        cout << "MATCH AT: " << coor.x << ", " << coor.y << endl;
         // output as column, row and ensure the coordinates are not 0 indexed
         outputFile << coor.y + 1 << ", " << coor.x + 1 << "\n";
     }
     outputFile.close();
     // cleanup memory 
-    for (int i = 0; i < numInputLines; i++) {
-//        cudaFree(inputLinesDevice[i]);
-        delete[] inputLines[i];
-    }
-    delete[] inputLines;
     cudaFree(inputLinesDevice);
-    for (int i = 0; i < numPatternLines; i++) {
- //       cudaFree(patternLinesDevice[i]);
-        delete[] patternLines[i];
-    }
-    delete[] patternLines;
     cudaFree(patternLinesDevice);
-  //  for (int i = 0; i < totalNumThreads; i++) {
-   //     cudaFree(allMatchLocationsDevice[i]);
-   ///     delete[] allMatchLocations[i];
-   // }
     delete[] allMatchLocations;
     cudaFree(allMatchLocationsDevice);
-   // delete[] numMatchesArr;
     cudaFree(numMatchesArrDevice);
     delete[] coordArr;
 
